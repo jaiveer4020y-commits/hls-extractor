@@ -5,65 +5,61 @@ const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 puppeteer.use(StealthPlugin());
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-app.get("/extract", async (req, res) => {
-  const { url } = req.query;
-  if (!url) return res.status(400).json({ error: "No URL provided" });
+app.get("/", (req, res) => {
+  res.send("✅ HLS Extractor running. Use /scrape?url=YOUR_URL");
+});
 
+// Scrape route
+app.get("/scrape", async (req, res) => {
+  const targetUrl = req.query.url;
+  if (!targetUrl) {
+    return res.status(400).send("❌ Please provide ?url= parameter");
+  }
+
+  let browser;
   try {
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    browser = await puppeteer.launch({
+      headless: "new",
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage"
+      ],
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
     });
+
     const page = await browser.newPage();
+    const captured = [];
 
-    let found = [];
-
-    // Intercept requests
-    page.on("request", request => {
-      const rurl = request.url();
-      if (rurl.includes(".m3u8")) {
-        found.push(rurl);
+    // Hook XHR and fetch
+    await page.setRequestInterception(true);
+    page.on("request", reqInt => {
+      if (reqInt.resourceType() === "xhr" || reqInt.resourceType() === "fetch") {
+        captured.push(reqInt.url());
       }
+      reqInt.continue();
     });
 
-    // Inject hook for fetch + XHR
-    await page.evaluateOnNewDocument(() => {
-      const origFetch = window.fetch;
-      window.fetch = async (...args) => {
-        const res = await origFetch(...args);
-        try {
-          if (args[0] && args[0].toString().includes(".m3u8")) {
-            console.log("🔗 fetch m3u8:", args[0]);
-          }
-        } catch (e) {}
-        return res;
-      };
+    await page.goto(targetUrl, { waitUntil: "networkidle2", timeout: 60000 });
 
-      const origOpen = XMLHttpRequest.prototype.open;
-      XMLHttpRequest.prototype.open = function (method, url) {
-        try {
-          if (url && url.includes(".m3u8")) {
-            console.log("🔗 xhr m3u8:", url);
-          }
-        } catch (e) {}
-        return origOpen.apply(this, arguments);
-      };
-    });
+    // Wait extra (player usually loads m3u8 within 5–10s)
+    await page.waitForTimeout(10000);
 
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
-
-    // wait for requests to happen
-    await new Promise(r => setTimeout(r, 8000));
-
-    const unique = [...new Set(found)];
     await browser.close();
 
-    res.json({ page: url, m3u8: unique });
+    res.json({
+      url: targetUrl,
+      captured
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    if (browser) await browser.close();
+    console.error("Error:", err);
+    res.status(500).send("❌ Scraping failed: " + err.message);
   }
 });
 
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`✅ Server running on ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});

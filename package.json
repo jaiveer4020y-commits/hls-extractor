@@ -1,14 +1,16 @@
 {
   "name": "hls-extractor",
   "version": "1.0.0",
+  "description": "HLS Extractor backend on Render",
   "main": "server.js",
-  "type": "module",
   "scripts": {
     "postinstall": "npx puppeteer browsers install chrome",
     "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "puppeteer": "^23.4.1"   // ✅ use full puppeteer, not puppeteer-core
+    "puppeteer": "^24.1.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   }
 }

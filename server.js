@@ -1,60 +1,54 @@
 import express from "express";
-import puppeteer from "puppeteer-extra";
-import StealthPlugin from "puppeteer-extra-plugin-stealth";
+import puppeteer from "puppeteer";
 
 const app = express();
-const PORT = process.env.PORT || 10000;
-
-puppeteer.use(StealthPlugin());
 
 app.get("/scrape", async (req, res) => {
   const targetUrl = req.query.url;
-  if (!targetUrl) return res.status(400).send("❌ Missing url parameter");
+  if (!targetUrl) {
+    return res.status(400).json({ error: "Missing ?url=" });
+  }
 
   try {
     const browser = await puppeteer.launch({
-      headless: "new",
+      headless: true,
       args: ["--no-sandbox", "--disable-setuid-sandbox"],
-      executablePath: puppeteer.executablePath() // ✅ picks Chrome installed by postinstall
+      executablePath: puppeteer.executablePath("chrome") // ✅ proper chrome path
     });
 
     const page = await browser.newPage();
 
-    let m3u8Urls = [];
-
-    // ✅ Intercept XHR + fetch requests
-    await page.setRequestInterception(true);
-    page.on("request", (reqIntercept) => {
-      reqIntercept.continue();
+    // Intercept network requests to grab m3u8
+    let m3u8Links = [];
+    page.on("request", (req) => {
+      const url = req.url();
+      if (url.includes(".m3u8")) {
+        m3u8Links.push(url);
+      }
     });
-    page.on("response", async (response) => {
-      try {
-        const url = response.url();
-        if (url.includes(".m3u8")) {
-          m3u8Urls.push(url);
-        }
-      } catch (err) {
-        console.error("Response error:", err);
+
+    page.on("response", async (resp) => {
+      const url = resp.url();
+      if (url.includes(".m3u8") && !m3u8Links.includes(url)) {
+        m3u8Links.push(url);
       }
     });
 
     await page.goto(targetUrl, { waitUntil: "networkidle2", timeout: 60000 });
-
-    // wait for video requests
-    await page.waitForTimeout(15000);
+    await page.waitForTimeout(5000); // give it time to load
 
     await browser.close();
 
-    if (m3u8Urls.length === 0) {
-      return res.send("⚠️ No m3u8 links found.");
+    if (m3u8Links.length === 0) {
+      return res.status(404).json({ error: "No m3u8 links found" });
     }
 
-    res.json({ m3u8: [...new Set(m3u8Urls)] }); // unique urls
+    res.json({ m3u8: [...new Set(m3u8Links)] }); // remove duplicates
   } catch (err) {
-    res.status(500).send(`❌ Scraping failed: ${err.message}`);
+    console.error("Scraping failed:", err.message);
+    res.status(500).json({ error: "❌ Scraping failed: " + err.message });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on ${PORT}`);
-});
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
